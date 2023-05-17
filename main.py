@@ -1,5 +1,6 @@
 import argparse
 import cv2
+import dlib
 import numpy as np
 import time
 import torch
@@ -7,6 +8,7 @@ import torch
 from imutils.video import VideoStream
 from imutils.video import FPS
 from torchvision.models import detection
+from tracker import CentroidTracker
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-i', '--image', type=str, default='',
@@ -16,12 +18,14 @@ parser.add_argument('-m', '--model', type=str, default='frcnn-mobilenet',
 	help='name of the object detection model')
 parser.add_argument('-l', '--labels', type=str, default='coco.txt',
 	help='path to file containing list of categories in COCO dataset')
-parser.add_argument('-c', '--confidence', type=float, default=0.7,
+parser.add_argument('-p', '--prob', type=float, default=0.7,
 	help='minimum probability to filter weak detections')
 parser.add_argument('-o', '--offset', type=int, default=15,
 	help='offset for class label')
 parser.add_argument('-s', '--skip_frames', type=int, default=1,
 	help='number of frames in which we run object detector once')
+parser.add_argument('-c', '--cls', type=str, default='dog',
+	help='class of objects to detect or track')
 args = parser.parse_args()
 
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
@@ -52,38 +56,39 @@ def get_detections(image):
 	x = x.to(device)
 	return model(x)[0]
 
-def get_class_examples(detections, cls_name):
+def get_class_examples(detections):
 	def is_probably_in_class(i):
-		label = int(detections['labels'][i]-1)
-		cls = CLASSES[label]
-		confidence = detections['scores'][i]
-		return cls == cls_name and confidence > args.confidence
+		cls = CLASSES[int(detections['labels'][i]-1)]
+		prob = detections['scores'][i]
+		return cls == args.cls and prob > args.prob
 	return [i for i in range(len(detections['boxes'])) if is_probably_in_class(i)]
 
-def plot_dogs(detections, image, cls='person'):
-	examples = get_class_examples(detections, cls)
+def plot_examples(detections, image):
+	examples = get_class_examples(detections)
 	for i in examples:
 		label = int(detections['labels'][i]-1)
-		confidence = detections['scores'][i]
+		prob = detections['scores'][i]
 		box = detections['boxes'][i].detach().cpu().numpy()
-		(startX, startY, endX, endY) = box.astype('int')
-		text = '{}: {:.2f}%'.format(cls, confidence * 100)
-		print('[INFO] {}'.format(text))
-		cv2.rectangle(image, (startX, startY), (endX, endY),
+		(x1, y1, x2, y2) = box.astype('int')
+		text = '{}: {:.2f}%'.format(args.cls, prob * 100)
+		# print('[INFO] {}'.format(text))
+		cv2.rectangle(image, (x1, y1), (x2, y2),
 			COLORS[label], 2)
-		y = startY - args.offset if startY - args.offset > args.offset else startY + args.offset
-		cv2.putText(image, text, (startX, y),
+		y = y1 - args.offset if y1 - args.offset > args.offset else y1 + args.offset
+		cv2.putText(image, text, (x1, y),
 			cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS[label], 2)
 	cv2.imshow('Output', image)
 
 def detect_single_image(path):
 	image = cv2.imread(path)
 	detections = get_detections(image)
-	plot_dogs(detections, image)
+	plot_examples(detections, image)
 	cv2.waitKey(0)
 
 def detect_video_stream():
 	n_frames = 0
+	trackers = []
+	ct = CentroidTracker(max_time_disappeared=40)
 	
 	print('[INFO] starting video stream...')
 	vs = VideoStream(src=0).start()
@@ -91,16 +96,46 @@ def detect_video_stream():
 	fps = FPS().start()
 
 	while True:
+		rects = []
 		frame = vs.read()
-		(H, W) = frame.shape[:2]
 		if n_frames % args.skip_frames == 0:
 			detections = get_detections(frame)
-		plot_dogs(detections, frame)
-		cv2.imshow('Frame', frame)
+			examples = get_class_examples(detections)
+			plot_examples(detections, frame)
+			for i in examples:
+				box = detections['boxes'][i].detach().cpu().numpy()
+				rect = box.astype('int')
+				rects.append(rect)
+				(x1, y1, x2, y2) = rect
+				tracker = dlib.correlation_tracker()
+				tracker.start_track(frame, dlib.rectangle(x1, y1, x2, y2))
+				trackers.append(tracker)
+				
+		else:
+			for tracker in trackers:
+				tracker.update(frame)
+				pos = tracker.get_position()
+				rects.append((
+					int(pos.left()),
+					int(pos.top()), 
+					int(pos.right()), 
+					int(pos.bottom())
+				))
+		
+		objects = ct.update(rects)
+		for id, (x, y) in objects.items():
+			text = "ID {}".format(id)
+			cv2.putText(frame, text, (x - args.offset, y - args.offset),
+				cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+			cv2.circle(frame, (x, y), 4, (0, 255, 0), -1)
+		cv2.imshow('Output', frame)
 		key = cv2.waitKey(1) & 0xFF
 		if key == ord('q'):
 			break
 		fps.update()
+		n_frames += 1
+	vs.stop()
+	cv2.destroyAllWindows()
 
 if args.image:
 	detect_single_image(args.image)
