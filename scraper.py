@@ -1,4 +1,8 @@
-import argparse, requests, re, json, urllib.request
+import argparse
+import requests
+import re
+import json
+import urllib.request
 from bs4 import BeautifulSoup
 
 headers = {
@@ -26,15 +30,18 @@ params = {
     'gl': 'us',                   # country where search comes from
 }
 
+
 def get_original_images():
-    # web scrapeing function shamelessly taken from https://serpapi.com/blog/scrape-google-images-with-python/ 
+    # web scrapeing function shamelessly taken from https://serpapi.com/blog/scrape-google-images-with-python/
     google_images = []
     all_script_tags = soup.select('script')
-    matched_images_data = ''.join(re.findall(r"AF_initDataCallback\(([^<]+)\);", str(all_script_tags)))
+    matched_images_data = ''.join(re.findall(
+        r"AF_initDataCallback\(([^<]+)\);", str(all_script_tags)))
     matched_images_data_fix = json.dumps(matched_images_data)
     matched_images_data_json = json.loads(matched_images_data_fix)
 
-    matched_google_image_data = re.findall(r'\"b-GRID_STATE0\"(.*)sideChannel:\s?{}}', matched_images_data_json)
+    matched_google_image_data = re.findall(
+        r'\"b-GRID_STATE0\"(.*)sideChannel:\s?{}}', matched_images_data_json)
     matched_google_images_thumbnails = ', '.join(
         re.findall(r'\[\"(https\:\/\/encrypted-tbn0\.gstatic\.com\/images\?.*?)\",\d+,\d+\]',
                    str(matched_google_image_data))).split(', ')
@@ -46,20 +53,23 @@ def get_original_images():
     # removing previously matched thumbnails for easier full resolution image matches.
     removed_matched_google_images_thumbnails = re.sub(
         r'\[\"(https\:\/\/encrypted-tbn0\.gstatic\.com\/images\?.*?)\",\d+,\d+\]', '', str(matched_google_image_data))
-    matched_google_full_resolution_images = re.findall(r"(?:'|,),\[\"(https:|http.*?)\",\d+,\d+\]", removed_matched_google_images_thumbnails)
+    matched_google_full_resolution_images = re.findall(
+        r"(?:'|,),\[\"(https:|http.*?)\",\d+,\d+\]", removed_matched_google_images_thumbnails)
 
     full_res_images = [
         bytes(bytes(img, 'ascii').decode('unicode-escape'), 'ascii').decode('unicode-escape') for img in matched_google_full_resolution_images
     ]
-    
+
     for index, (metadata, thumbnail, original) in enumerate(zip(soup.select('.isv-r.PNCib.MSM1fd.BUooTd'), thumbnails, full_res_images), start=1):
-        print(f'Downloading {index} image...')        
-        opener=urllib.request.build_opener()
-        opener.addheaders=[('User-Agent','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.54 Safari/537.36')]
+        print(f'Downloading {index} image...')
+        opener = urllib.request.build_opener()
+        opener.addheaders = [
+            ('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.54 Safari/537.36')]
         urllib.request.install_opener(opener)
 
-        try: 
-            urllib.request.urlretrieve(original, f'{args.dir}/{args.base}_{index}.jpg')
+        try:
+            urllib.request.urlretrieve(
+                original, f'{args.dir}/{args.base}_{index}.jpg')
             google_images.append({
                 'title': metadata.select_one('.VFACy.kGQAp.sMi44c.lNHeqe.WGvvNb')['title'],
                 'link': metadata.select_one('.VFACy.kGQAp.sMi44c.lNHeqe.WGvvNb')['href'],
@@ -72,12 +82,13 @@ def get_original_images():
 
     return google_images
 
+
 n_images = 0
 while n_images < args.n_images:
-    html = requests.get('https://www.google.com/search', params=params, headers=headers, timeout=30)
+    html = requests.get('https://www.google.com/search',
+                        params=params, headers=headers, timeout=30)
     soup = BeautifulSoup(html.text, 'html.parser')
     n_new_images = len(get_original_images())
     n_images += n_new_images
     print('PAGE {}: collected {} images'.format(params['ijn'], n_new_images))
     params['ijn'] += 1
-    

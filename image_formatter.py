@@ -14,7 +14,7 @@ parser.add_argument('-f', '--format', type=str, default='png',
                     help='format to save image in')
 args = parser.parse_args()
 
-exts = ['.png', '.jpg', 'jpeg']
+exts = ['.png', '.jpg', '.jpeg', '.webp']
 
 def process_image(path, count):
     original = Image.open(path)
